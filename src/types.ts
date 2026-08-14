@@ -54,7 +54,7 @@ export interface Props {
 export type Feature = GJFeature<Geometry, Props>;
 export type FC = GJFeatureCollection<Geometry, Props>;
 
-export type EditAction =
+export type EditAction = (
   | { type: "demolish"; id: string; cost: number; label: string }
   | {
       type: "remodel";
@@ -71,7 +71,11 @@ export type EditAction =
       features: Feature[];
       cost: number;
       label: string;
-    };
+    }
+) & {
+  /** Stamped at apply time; sandbox edits never count against a budget. */
+  sandbox?: boolean;
+};
 
 export interface Scores {
   walk: number;

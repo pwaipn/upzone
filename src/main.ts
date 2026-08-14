@@ -96,14 +96,24 @@ store.on("place", () => {
   activeScenario = store.mode === "project" ? scenarioFor(store.place.slug) : null;
 });
 
+store.on("mode", () => {
+  // Imports can flip the mode without going through the project buttons.
+  activeScenario = store.mode === "project" ? scenarioFor(store.place.slug) : null;
+});
+
 async function loadMclean(): Promise<void> {
   ui.showOverlay("Unrolling the McLean sheet…");
   try {
     const res = await fetch(`${import.meta.env.BASE_URL}data/mclean.geo.json`);
+    if (!res.ok) {
+      throw new Error(`Could not load the McLean map data (HTTP ${res.status}). Reload to try again.`);
+    }
     const raw = await res.json();
     const features = categorize(raw);
     store.loadPlace(MCLEAN, features);
     view.flyTo(MCLEAN.center, MCLEAN.zoom);
+  } catch (err) {
+    ui.toast(String((err as Error).message ?? err), false);
   } finally {
     ui.showOverlay(null);
   }

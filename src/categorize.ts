@@ -45,7 +45,7 @@ function buildingUse(tags: Record<string, unknown>): BuildingUse {
   if (["retail", "commercial", "supermarket", "kiosk"].includes(b)) return "retail";
   if (["apartments", "dormitory", "residential"].includes(b)) return "apartment";
   if (["house", "detached", "semidetached_house", "terrace", "bungalow", "static_caravan"].includes(b)) return "house";
-  if (b === "garage" || b === "garages" || b === "carport") return "garage";
+  if (b === "garage" || b === "garages" || b === "carport" || b === "parking") return "garage";
   if (b === "office") return "office";
   if (["school", "university", "college", "church", "civic", "government", "public", "hospital", "fire_station", "kindergarten"].includes(b)) return "civic";
   if (b === "mixed_use" || b === "mixed") return "mixeduse";
@@ -95,13 +95,20 @@ export function categorize(raw: { features: unknown[] }): Feature[] {
     // Buildings (including structured parking, which reads as a garage building)
     if (tags.building && tags.building !== "no" && isPolygonal(rf)) {
       let use = buildingUse(tags);
-      if (tags.amenity === "parking" && tags.parking === "multi-storey") use = "garage";
+      // building=parking is a structured garage, not a residential one; give
+      // it a garage's height rather than a carport's.
+      const structuredParking =
+        String(tags.building) === "parking" ||
+        (tags.amenity === "parking" && tags.parking === "multi-storey");
+      if (structuredParking) use = "garage";
       let levels = Number(tags["building:levels"]);
       const heightTag = parseFloat(String(tags.height ?? ""));
       if (!Number.isFinite(levels) || levels <= 0) {
         levels = Number.isFinite(heightTag) && heightTag > 0
           ? Math.max(1, Math.round(heightTag / METERS_PER_LEVEL))
-          : defaultLevels(use);
+          : structuredParking
+            ? 4
+            : defaultLevels(use);
       }
       const f = mk({
         kind: "building",
@@ -131,11 +138,26 @@ export function categorize(raw: { features: unknown[] }): Feature[] {
       continue;
     }
 
-    // Roads
+    // Roads (street-running trams are tagged highway + railway on one way;
+    // emit both so the rail is not lost)
     if (tags.highway && (geomType === "LineString" || geomType === "MultiLineString")) {
       const rc = ROAD_CLASS[String(tags.highway)];
-      if (!rc) continue;
-      out.push(mk({ kind: "road", roadClass: rc, name: tags.name as string | undefined }));
+      if (rc) {
+        out.push(mk({ kind: "road", roadClass: rc, name: tags.name as string | undefined }));
+      }
+      const r = String(tags.railway ?? "");
+      if (["rail", "subway", "light_rail", "tram"].includes(r)) {
+        out.push({
+          type: "Feature",
+          geometry: rf.geometry,
+          properties: {
+            id: `${id}-rail`,
+            kind: "rail",
+            railKind: r === "light_rail" || r === "tram" ? "lightrail" : "metro",
+            name: tags.name as string | undefined,
+          } as Props,
+        });
+      }
       continue;
     }
 
@@ -153,8 +175,21 @@ export function categorize(raw: { features: unknown[] }): Feature[] {
 
     // Stations and stops
     if (geomType === "Point") {
-      if (tags.railway === "station" || tags.station) {
-        out.push(mk({ kind: "station", railKind: "metro", name: tags.name as string | undefined }));
+      if (
+        tags.railway === "station" ||
+        tags.railway === "halt" ||
+        tags.railway === "tram_stop" ||
+        tags.station
+      ) {
+        const light =
+          tags.railway === "tram_stop" ||
+          tags.station === "light_rail" ||
+          tags.station === "tram";
+        out.push(mk({
+          kind: "station",
+          railKind: light ? "lightrail" : "metro",
+          name: tags.name as string | undefined,
+        }));
         continue;
       }
       if (tags.highway === "bus_stop" || tags.public_transport === "platform") {

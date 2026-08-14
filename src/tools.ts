@@ -4,7 +4,13 @@ import type { MapMouseEvent } from "maplibre-gl";
 import type { Feature } from "./types";
 import type { Store } from "./state";
 import type { MapView } from "./mapview";
-import { GridIndex, makeProj, type Proj } from "./geometry";
+import { distM, GridIndex, makeProj, type Proj } from "./geometry";
+
+function totalM(coords: [number, number][]): number {
+  let m = 0;
+  for (let i = 1; i < coords.length; i++) m += distM(coords[i - 1], coords[i]);
+  return m;
+}
 import {
   addRail,
   addRoad,
@@ -46,7 +52,10 @@ export class Tools {
     map.on("mousemove", (e) => this.move(e));
     window.addEventListener("keydown", (e) => this.key(e));
     store.on("change", () => this.rebuildSnap());
-    store.on("place", () => this.rebuildSnap());
+    store.on("place", () => {
+      this.rebuildSnap();
+      this.setTool("select");
+    });
   }
 
   setTool(t: ToolName): void {
@@ -183,14 +192,19 @@ export class Tools {
   }
 
   finishDraft(): void {
-    if (this.draft.length < 2) {
+    // A double-click fires two map clicks before dblclick, leaving duplicate
+    // trailing vertices; drop consecutive near-duplicates before committing.
+    const coords = this.draft.filter(
+      (c, i, a) => i === 0 || distM(c, a[i - 1]) > 1,
+    );
+    if (coords.length < 2 || totalM(coords) < 10) {
       this.cancelDraft();
       return;
     }
     const action =
       this.active === "road"
-        ? addRoad(this.store, this.draft)
-        : addRail(this.store, this.draft);
+        ? addRoad(this.store, coords)
+        : addRail(this.store, coords);
     const res = this.store.apply(action);
     this.onActionResult?.(res.ok ? action.label : res.reason ?? "", res.ok);
     this.draft = [];
@@ -212,10 +226,13 @@ export class Tools {
       }
     } else if (e.key === "Enter" && (this.active === "road" || this.active === "rail")) {
       this.finishDraft();
-    } else if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
       e.preventDefault();
       if (e.shiftKey) this.store.redo();
       else this.store.undo();
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "y") {
+      e.preventDefault();
+      this.store.redo();
     }
   }
 }

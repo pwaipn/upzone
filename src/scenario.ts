@@ -1,5 +1,6 @@
 // Project mode: a budget and a checklist. The first scenario is the one this
 // game was built for: tie downtown McLean to its own Metro station.
+import * as turf from "@turf/turf";
 import type { Feature, Scores } from "./types";
 import type { Store } from "./state";
 import { distM } from "./geometry";
@@ -46,25 +47,69 @@ export const MCLEAN_CONNECTOR: Scenario = {
     const newStations = features.filter(
       (f) => f.properties.kind === "station" && f.properties.isNew && f.geometry.type === "Point",
     );
-    const railLengthKm =
-      features
-        .filter((f) => f.properties.kind === "rail" && f.properties.isNew)
-        .reduce((sum, f) => {
-          if (f.geometry.type !== "LineString") return sum;
-          let m = 0;
-          const c = f.geometry.coordinates as [number, number][];
-          for (let i = 1; i < c.length; i++) m += distM(c[i - 1], c[i]);
-          return sum + m;
-        }, 0) / 1000;
+    const newRail = features.filter(
+      (f) => f.properties.kind === "rail" && f.properties.isNew && f.geometry.type === "LineString",
+    );
+    const lineCoords = newRail.map(
+      (f) => (f.geometry as GeoJSON.LineString).coordinates as [number, number][],
+    );
 
+    // Group the new track into connected components (lines whose vertices
+    // come within a station-platform's length of each other), so two
+    // disconnected stubs cannot satisfy the link.
+    const parent = lineCoords.map((_, i) => i);
+    const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    const touches = (a: [number, number][], b: [number, number][]) =>
+      a.some((pa) => b.some((pb) => distM(pa, pb) < 60));
+    for (let i = 0; i < lineCoords.length; i++) {
+      for (let j = i + 1; j < lineCoords.length; j++) {
+        if (find(i) !== find(j) && touches(lineCoords[i], lineCoords[j])) {
+          parent[find(j)] = find(i);
+        }
+      }
+    }
+    const lineLenM = (c: [number, number][]) => {
+      let m = 0;
+      for (let i = 1; i < c.length; i++) m += distM(c[i - 1], c[i]);
+      return m;
+    };
     const stationCoord = (f: Feature): [number, number] =>
       (f.geometry as GeoJSON.Point).coordinates as [number, number];
+    const onLine = (s: [number, number], line: Feature) => {
+      try {
+        const snapped = turf.nearestPointOnLine(line as never, turf.point(s), {
+          units: "meters",
+        });
+        return ((snapped.properties.dist as number) ?? Infinity) < 40;
+      } catch {
+        return false;
+      }
+    };
+
+    const railLengthKm = lineCoords.reduce((sum, c) => sum + lineLenM(c), 0) / 1000;
+    let linked = false;
+    const roots = new Set(lineCoords.map((_, i) => find(i)));
+    for (const root of roots) {
+      const memberIdx = lineCoords.map((_, i) => i).filter((i) => find(i) === root);
+      const lenKm = memberIdx.reduce((s, i) => s + lineLenM(lineCoords[i]), 0) / 1000;
+      if (lenKm < 2.5) continue;
+      const componentStations = newStations.filter((f) =>
+        memberIdx.some((i) => onLine(stationCoord(f), newRail[i])),
+      );
+      const hasDowntown = componentStations.some(
+        (f) => distM(stationCoord(f), DOWNTOWN_MCLEAN) < 500,
+      );
+      const hasMetro =
+        metro !== null &&
+        componentStations.some((f) => distM(stationCoord(f), metro) < 400);
+      if (hasDowntown && hasMetro) {
+        linked = true;
+        break;
+      }
+    }
     const nearDowntown = newStations.some(
       (f) => distM(stationCoord(f), DOWNTOWN_MCLEAN) < 500,
     );
-    const nearMetro =
-      metro !== null && newStations.some((f) => distM(stationCoord(f), metro) < 400);
-    const linked = nearDowntown && nearMetro && railLengthKm >= 2.5;
 
     const parkingNow = features
       .filter((f) => f.properties.kind === "parking")

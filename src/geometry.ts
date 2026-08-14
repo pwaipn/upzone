@@ -133,8 +133,13 @@ export interface LotSplit {
 export function splitLotByRoad(lot: Feature, road: NearestRoad): LotSplit {
   const centroid = turf.centroid(lot as never).geometry.coordinates as [number, number];
   const toRoad = turf.bearing(turf.point(centroid), turf.point(road.point));
-  // Rectangle covering everything on the rear side of the centroid line.
-  const rearCenter = turf.destination(turf.point(centroid), 1000, toRoad + 180, {
+  // Rectangle covering everything on the rear side of the centroid line. The
+  // rear direction must be perpendicular to the road axis (not the reverse of
+  // the centroid-to-road bearing, which skews the split for angled lots), on
+  // whichever perpendicular points away from the road.
+  const rel = (((toRoad - road.bearing) % 360) + 360) % 360;
+  const rearDir = rel < 180 ? road.bearing - 90 : road.bearing + 90;
+  const rearCenter = turf.destination(turf.point(centroid), 1000, rearDir, {
     units: "meters",
   }).geometry.coordinates as [number, number];
   const rearHalf = turf.feature(orientedRect(rearCenter, road.bearing, 4000, 2000));

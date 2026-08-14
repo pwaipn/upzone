@@ -110,13 +110,16 @@ export class UI {
     input.placeholder = "Survey another place…";
     input.setAttribute("aria-label", "Search for a place");
     const results = el("div", "search-results hidden");
+    let searchGen = 0;
     input.addEventListener("keydown", async (e) => {
       if (e.key !== "Enter" || !input.value.trim()) return;
+      const gen = ++searchGen;
       results.textContent = "";
       results.classList.remove("hidden");
       results.appendChild(el("div", "search-hint", "Searching…"));
       try {
         const found = await geocode(input.value.trim());
+        if (gen !== searchGen) return;
         results.textContent = "";
         if (!found.length) {
           results.appendChild(el("div", "search-hint", "Nothing found by that name."));
@@ -132,6 +135,7 @@ export class UI {
           results.appendChild(b);
         }
       } catch (err) {
+        if (gen !== searchGen) return;
         results.textContent = "";
         results.appendChild(el("div", "search-hint", String((err as Error).message)));
       }

@@ -112,7 +112,9 @@ export class Store {
 
   spent(): number {
     let s = 0;
-    for (let i = 0; i < this.cursor; i++) s += this.edits[i].cost;
+    for (let i = 0; i < this.cursor; i++) {
+      if (!this.edits[i].sandbox) s += this.edits[i].cost;
+    }
     return s;
   }
 
@@ -125,6 +127,7 @@ export class Store {
     if (this.mode === "project" && a.cost > this.remaining()) {
       return { ok: false, reason: "Not enough budget left for that." };
     }
+    if (this.mode === "sandbox") a.sandbox = true;
     this.edits.length = this.cursor;
     this.edits.push(a);
     this.cursor++;
@@ -204,7 +207,13 @@ export class Store {
 
   exportJSON(): string {
     return JSON.stringify(
-      { place: this.place, edits: this.edits, cursor: this.cursor },
+      {
+        place: this.place,
+        edits: this.edits,
+        cursor: this.cursor,
+        mode: this.mode,
+        budgetTotal: this.budgetTotal,
+      },
       null,
       2,
     );
@@ -214,10 +223,17 @@ export class Store {
     try {
       const data = JSON.parse(text);
       if (data.place?.slug !== this.place.slug) return false;
-      this.edits = data.edits ?? [];
-      this.cursor = Math.min(data.cursor ?? this.edits.length, this.edits.length);
+      if (!Array.isArray(data.edits)) return false;
+      this.edits = data.edits;
+      this.cursor = Math.min(
+        Math.max(0, data.cursor ?? this.edits.length),
+        this.edits.length,
+      );
+      this.mode = data.mode === "project" ? "project" : "sandbox";
+      this.budgetTotal = typeof data.budgetTotal === "number" ? data.budgetTotal : 0;
       this.derived = null;
       this.persist();
+      this.emit("mode");
       this.emit("change");
       return true;
     } catch {

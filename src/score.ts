@@ -79,8 +79,10 @@ export function computeScores(features: Feature[], refLat: number): Scores {
         case "road": {
           if (f.geometry.type !== "LineString") break;
           if (!WALKABLE.has(p.roadClass ?? "")) break;
-          const coords = f.geometry.coordinates;
-          const mid = coords[Math.floor(coords.length / 2)];
+          // Sample at the true mid-length point; the middle vertex of a
+          // two-point street is its far end, not its middle.
+          const mid = turf.along(f as never, turf.length(f as never) / 2)
+            .geometry.coordinates;
           const [x, y] = proj.toXY(mid[0], mid[1]);
           roadSamples.push({ id: p.id, x, y });
           break;

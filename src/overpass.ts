@@ -20,11 +20,13 @@ export async function geocode(q: string): Promise<GeocodeResult[]> {
     display_name: string;
     lat: string;
     lon: string;
+    osm_type: string;
     osm_id: number;
   }[];
+  // osm_id is only unique per element type, so the slug needs both.
   return data.map((d) => ({
     name: d.display_name.split(",").slice(0, 3).join(","),
-    slug: `osm-${d.osm_id}`,
+    slug: `osm-${d.osm_type}-${d.osm_id}`,
     lat: parseFloat(d.lat),
     lon: parseFloat(d.lon),
   }));
