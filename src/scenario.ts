@@ -79,7 +79,7 @@ export const MCLEAN_CONNECTOR: Scenario = {
         detail: linked
           ? `${railLengthKm.toFixed(1)} km of new light rail in service`
           : nearDowntown
-            ? "Downtown has a station. Now reach the Metro."
+            ? "Downtown has its station, but the line does not reach the Metro yet."
             : "Draw a light rail line with stations near both anchors.",
       },
       {

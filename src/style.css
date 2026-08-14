@@ -239,13 +239,28 @@ button:focus-visible {
   margin: 6px 8px;
 }
 
-/* ---- inspector ---- */
-.inspector {
+/* ---- right rail: inspector above, review pinned below ---- */
+.rightrail {
+  position: absolute;
   top: 70px;
   right: 10px;
+  bottom: 26px;
   width: 270px;
-  max-height: calc(100% - 320px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.rightrail .panel {
+  position: static;
+  pointer-events: auto;
+}
+
+.inspector {
   overflow-y: auto;
+  flex: 0 1 auto;
 }
 
 .inspector .meta {
@@ -298,9 +313,9 @@ button:focus-visible {
 
 /* ---- score panel ---- */
 .scorepanel {
-  right: 10px;
-  bottom: 26px;
-  width: 270px;
+  margin-top: auto;
+  overflow-y: auto;
+  flex: 0 1 auto;
 }
 
 .score-row {

@@ -39,6 +39,7 @@ export interface UICallbacks {
 }
 
 export class UI {
+  private rightRail!: HTMLElement;
   private inspector!: HTMLElement;
   private scoreBars!: HTMLElement;
   private stampWrap!: HTMLElement;
@@ -61,8 +62,10 @@ export class UI {
     private scenarioProvider: () => Scenario | null,
   ) {
     this.buildTopbar();
-    this.buildToolbar();
+    this.rightRail = el("div", "rightrail");
+    this.root.appendChild(this.rightRail);
     this.buildInspector();
+    this.buildToolbar();
     this.buildScorePanel();
     this.toasts = el("div", "toasts");
     this.root.appendChild(this.toasts);
@@ -221,7 +224,7 @@ export class UI {
   // ---- inspector --------------------------------------------------------
   private buildInspector(): void {
     this.inspector = el("aside", "inspector panel");
-    this.root.appendChild(this.inspector);
+    this.rightRail.appendChild(this.inspector);
     this.renderInspector();
   }
 
@@ -262,8 +265,17 @@ export class UI {
       box.appendChild(
         el("p", "hint",
           this.tools.active === "road"
-            ? "Click each corner of the alignment. Corners snap to existing streets so the network stays connected. Press Enter or double-click to pave it."
-            : "Click along the route you want the line to take, then press Enter. Both ends get a station, and the Station tool adds more along the way."),
+            ? "Click each corner of the alignment. Corners snap to existing streets so the network stays connected."
+            : "Click along the route you want the line to take. Both ends get a station, and the Station tool adds more along the way."),
+      );
+      const finish = el("button", "action", "Finish the line");
+      finish.addEventListener("click", () => this.tools.finishDraft());
+      box.appendChild(finish);
+      const cancel = el("button", "action", "Scrap the draft");
+      cancel.addEventListener("click", () => this.tools.cancelDraft());
+      box.appendChild(cancel);
+      box.appendChild(
+        el("p", "hint", "Enter and double-click also finish. Escape scraps it."),
       );
       return;
     }
@@ -380,7 +392,7 @@ export class UI {
     panel.appendChild(this.budgetLine);
     this.scenarioBox = el("div", "scenario");
     panel.appendChild(this.scenarioBox);
-    this.root.appendChild(panel);
+    this.rightRail.appendChild(panel);
     this.renderBudget();
   }
 

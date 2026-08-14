@@ -1,3 +1,4 @@
+import "./rafshim";
 import "@fontsource/overpass/700.css";
 import "@fontsource/overpass/600.css";
 import "@fontsource/public-sans/400.css";
@@ -130,3 +131,11 @@ async function loadRemotePlace(r: GeocodeResult): Promise<void> {
 }
 
 void loadMclean();
+
+// Debug handle for the browser console.
+declare global {
+  interface Window {
+    upzone?: { store: Store; view: MapView };
+  }
+}
+window.upzone = { store, view };

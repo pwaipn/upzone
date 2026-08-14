@@ -63,6 +63,14 @@ export class MapView {
       bearing: -17,
       maxPitch: 70,
       attributionControl: false,
+      // Keep frames in the buffer so hidden/embedded tabs still show the map.
+      canvasContextAttributes: { antialias: true, preserveDrawingBuffer: true },
+      // Hidden tabs get a constrained GPU allocation; a 2x buffer there can
+      // lose the WebGL context outright. Visible tabs keep full resolution.
+      pixelRatio:
+        document.visibilityState === "hidden"
+          ? 1
+          : Math.min(window.devicePixelRatio || 1, 2),
     });
     this.map.addControl(
       new AttributionControl({
@@ -75,14 +83,21 @@ export class MapView {
       new NavigationControl({ visualizePitch: true }),
       "bottom-left",
     );
+    this.map.on("error", (e) => {
+      console.error("[upzone map]", e.error ?? e);
+    });
     this.map.on("load", () => {
       this.addSourcesAndLayers();
       this.loaded = true;
+      this.map.resize();
       if (this.pendingRefresh) {
         this.refresh(this.pendingRefresh);
         this.pendingRefresh = null;
       }
     });
+    // ResizeObserver stalls in hidden tabs; keep the canvas matched to the
+    // window ourselves as well.
+    window.addEventListener("resize", () => this.map.resize());
   }
 
   private addSourcesAndLayers(): void {
