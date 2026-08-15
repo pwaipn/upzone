@@ -48,6 +48,10 @@ export interface Props {
   zone?: "residential" | "commercial" | "industrial";
   isNew?: boolean;
   areaM2?: number;
+  streetscape?: "dieted" | "pedestrianized";
+  treeLined?: boolean;
+  lineColor?: string;
+  lineName?: string;
   [key: string]: unknown;
 }
 
@@ -65,6 +69,14 @@ export type EditAction = (
       label: string;
     }
   | { type: "add"; features: Feature[]; cost: number; label: string }
+  | {
+      type: "restreet";
+      id: string;
+      streetscape?: "dieted" | "pedestrianized";
+      treeLined?: boolean;
+      cost: number;
+      label: string;
+    }
   | {
       type: "replace";
       removeId: string;
@@ -98,7 +110,13 @@ export const COST = {
   roadPerKm: 7_000_000,
   lightRailPerKm: 90_000_000,
   station: 45_000_000,
+  treesPerKm: 600_000,
+  roadDietPerKm: 2_500_000,
+  pedestrianizePerKm: 5_000_000,
 };
+
+/** Line colors for new transit lines, assigned in order. */
+export const TRANSIT_COLORS = ["#2E6B4F", "#8E3B4A", "#2F6D74", "#A87B2D", "#22303C"];
 
 export const METERS_PER_LEVEL = 3.2;
 

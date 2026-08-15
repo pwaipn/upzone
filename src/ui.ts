@@ -4,7 +4,7 @@ import type { Scores } from "./types";
 import { fmtArea, fmtMoney } from "./types";
 import type { Store } from "./state";
 import type { Tools, ToolName } from "./tools";
-import { BUILDING_PRESETS, convertParking, demolish, remodel } from "./edits";
+import { BUILDING_PRESETS, convertParking, demolish, remodel, restreet } from "./edits";
 import type { GoalResult, Scenario } from "./scenario";
 import { grade } from "./score";
 import type { GeocodeResult } from "./overpass";
@@ -25,6 +25,7 @@ const ICONS: Record<string, string> = {
   select: `<svg viewBox="0 0 18 18"><path d="M4 2l9 8-4 1 2.5 4.5-2 1L7 12l-3 3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,
   bulldoze: `<svg viewBox="0 0 18 18"><path d="M3 15h12M5 15V8h5v7M10 10h4v5M4 5l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 3.5l8 8" stroke="currentColor" stroke-width="1.4"/></svg>`,
   build: `<svg viewBox="0 0 18 18"><path d="M3 15V6h5v9M8 15V3h7v12M3 15h13" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 5.5h2M10.5 8h2M10.5 10.5h2" stroke="currentColor" stroke-width="1.2"/></svg>`,
+  trace: `<svg viewBox="0 0 18 18"><path d="M4 6l6-3 5 4-2 8-8 1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="10" cy="3" r="1.5" fill="currentColor"/><circle cx="15" cy="7" r="1.5" fill="currentColor"/></svg>`,
   road: `<svg viewBox="0 0 18 18"><path d="M5 16C5 10 8 8 13 2M9 16c0-6 3-8 7-12" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`,
   rail: `<svg viewBox="0 0 18 18"><path d="M3 14L14 3" stroke="currentColor" stroke-width="1.6"/><path d="M5 10l2 2M8 7l2 2M11 4l2 2" stroke="currentColor" stroke-width="1.2"/></svg>`,
   station: `<svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="9" r="1.4" fill="currentColor"/></svg>`,
@@ -36,6 +37,7 @@ export interface UICallbacks {
   onToggleLens(): boolean;
   onStartProject(): void;
   onEndProject(): void;
+  onExportReport(): void;
 }
 
 export class UI {
@@ -50,6 +52,7 @@ export class UI {
   private overlay!: HTMLElement;
   private overlayMsg!: HTMLElement;
   private toolButtons = new Map<ToolName, HTMLButtonElement>();
+  private draftStats: HTMLElement | null = null;
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
   private lensBtn!: HTMLButtonElement;
@@ -91,6 +94,23 @@ export class UI {
       this.renderInspector();
     });
     tools.onToolChange = () => this.syncToolButtons();
+    tools.onDraftChange = (vertices, lengthM) => {
+      if (!this.draftStats) return;
+      if (vertices === 0) {
+        this.draftStats.textContent = "";
+        return;
+      }
+      const t = this.tools.active;
+      let est = "";
+      if (t === "rail") {
+        est = fmtMoney((lengthM / 1000) * 90_000_000 + 2 * 45_000_000);
+      } else if (t === "road") {
+        est = fmtMoney((lengthM / 1000) * 7_000_000);
+      }
+      this.draftStats.textContent =
+        `${vertices} ${vertices === 1 ? "point" : "points"} · ${(lengthM / 1000).toFixed(2)} km` +
+        (est ? ` · about ${est}` : "");
+    };
     tools.onActionResult = (msg, ok) => {
       if (msg) this.toast(msg, ok);
     };
@@ -163,6 +183,9 @@ export class UI {
       a.click();
       URL.revokeObjectURL(a.href);
     });
+    const reportBtn = el("button", "btn", "Report");
+    reportBtn.title = "Export a before-and-after district review sheet as an image";
+    reportBtn.addEventListener("click", () => this.cb.onExportReport());
     const importBtn = el("button", "btn", "Import");
     const file = el("input") as HTMLInputElement;
     file.type = "file";
@@ -178,6 +201,7 @@ export class UI {
     importBtn.addEventListener("click", () => file.click());
     actions.appendChild(this.undoBtn);
     actions.appendChild(this.redoBtn);
+    actions.appendChild(reportBtn);
     actions.appendChild(exportBtn);
     actions.appendChild(importBtn);
     actions.appendChild(file);
@@ -192,6 +216,7 @@ export class UI {
       { name: "select", label: "Inspect", hint: "Click anything to read its file card" },
       { name: "bulldoze", label: "Bulldoze", hint: "Click a building or parking lot to clear it" },
       { name: "build", label: "Build", hint: "Click to place; footprints align to the nearest street" },
+      { name: "trace", label: "Trace", hint: "Click the corners of a custom footprint, then finish" },
       { name: "road", label: "Street", hint: "Click corners, then press Enter or double-click to pave" },
       { name: "rail", label: "Light rail", hint: "Click the route, then Enter. Termini get stations" },
       { name: "station", label: "Station", hint: "Click along any rail line to add a stop" },
@@ -246,8 +271,8 @@ export class UI {
     const title = el("h2", "panel-title");
     box.appendChild(title);
 
-    if (this.tools.active === "build") {
-      title.textContent = "Building catalog";
+    if (this.tools.active === "build" || this.tools.active === "trace") {
+      title.textContent = this.tools.active === "build" ? "Building catalog" : "Trace a footprint";
       for (const p of BUILDING_PRESETS) {
         const b = el("button", "action preset");
         b.appendChild(el("span", "", p.name));
@@ -259,9 +284,23 @@ export class UI {
         });
         box.appendChild(b);
       }
-      box.appendChild(
-        el("p", "hint", "Click the map to place it. The footprint turns itself to face the nearest street."),
-      );
+      if (this.tools.active === "build") {
+        box.appendChild(
+          el("p", "hint", "Click the map to place it. The footprint turns itself to face the nearest street."),
+        );
+      } else {
+        box.appendChild(
+          el("p", "hint", "Click each corner of the footprint you want, in order. The chosen catalog entry sets the use and floors."),
+        );
+        const finish = el("button", "action", "Raise the building");
+        finish.addEventListener("click", () => this.tools.finishDraft());
+        box.appendChild(finish);
+        const cancel = el("button", "action", "Scrap the draft");
+        cancel.addEventListener("click", () => this.tools.cancelDraft());
+        box.appendChild(cancel);
+        this.draftStats = el("p", "meta draft-stats", "");
+        box.appendChild(this.draftStats);
+      }
       return;
     }
     if (this.tools.active === "road" || this.tools.active === "rail") {
@@ -278,6 +317,8 @@ export class UI {
       const cancel = el("button", "action", "Scrap the draft");
       cancel.addEventListener("click", () => this.tools.cancelDraft());
       box.appendChild(cancel);
+      this.draftStats = el("p", "meta draft-stats", "");
+      box.appendChild(this.draftStats);
       box.appendChild(
         el("p", "hint", "Enter and double-click also finish. Escape scraps it."),
       );
@@ -352,7 +393,33 @@ export class UI {
     }
     if (p.kind === "road") {
       title.textContent = p.name ?? "Street";
-      box.appendChild(el("p", "meta", `Class: ${p.roadClass ?? "street"}${p.isNew ? " · built by you" : ""}`));
+      const state =
+        p.streetscape === "pedestrianized" ? " · pedestrianized"
+        : p.streetscape === "dieted" ? " · road-dieted"
+        : p.treeLined ? " · tree-lined"
+        : "";
+      box.appendChild(
+        el("p", "meta", `Class: ${p.roadClass ?? "street"}${state}${p.isNew ? " · built by you" : ""}`),
+      );
+      const dietable = ["primary", "secondary", "tertiary", "residential"].includes(p.roadClass ?? "");
+      if (dietable) {
+        if (!p.treeLined) {
+          const t = restreet(f, "trees");
+          box.appendChild(this.actionButton("Plant street trees", t.cost, () => this.apply(t)));
+        }
+        if (p.streetscape !== "dieted" && p.streetscape !== "pedestrianized") {
+          const d2 = restreet(f, "diet");
+          box.appendChild(
+            this.actionButton("Road diet: bike lanes and trees", d2.cost, () => this.apply(d2)),
+          );
+        }
+        if (p.streetscape !== "pedestrianized" && p.roadClass !== "primary") {
+          const pz = restreet(f, "pedestrianize");
+          box.appendChild(
+            this.actionButton("Pedestrianize the street", pz.cost, () => this.apply(pz)),
+          );
+        }
+      }
       if (p.isNew) {
         const d = demolish(f);
         box.appendChild(this.actionButton("Tear out", d.cost, () => this.apply(d)));

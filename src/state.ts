@@ -92,6 +92,20 @@ export class Store {
         case "add":
           for (const f of a.features) m.set(f.properties.id, f);
           break;
+        case "restreet": {
+          const f = m.get(a.id);
+          if (f) {
+            m.set(a.id, {
+              ...f,
+              properties: {
+                ...f.properties,
+                ...(a.streetscape ? { streetscape: a.streetscape } : {}),
+                ...(a.treeLined !== undefined ? { treeLined: a.treeLined } : {}),
+              },
+            });
+          }
+          break;
+        }
         case "replace":
           m.delete(a.removeId);
           for (const f of a.features) m.set(f.properties.id, f);

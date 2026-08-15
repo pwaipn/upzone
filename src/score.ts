@@ -26,7 +26,7 @@ export function computeScores(features: Feature[], refLat: number): Scores {
 
   let totalParkM2 = 0;
   let totalParkingM2 = 0;
-  const roadSamples: { id: string; x: number; y: number }[] = [];
+  const roadSamples: { id: string; x: number; y: number; bonus: number }[] = [];
 
   for (const f of features) {
     const p = f.properties;
@@ -84,7 +84,10 @@ export function computeScores(features: Feature[], refLat: number): Scores {
           const mid = turf.along(f as never, turf.length(f as never) / 2)
             .geometry.coordinates;
           const [x, y] = proj.toXY(mid[0], mid[1]);
-          roadSamples.push({ id: p.id, x, y });
+          const bonus =
+            (p.streetscape === "pedestrianized" ? 0.25 : p.streetscape === "dieted" ? 0.15 : 0) +
+            (p.treeLined ? 0.05 : 0);
+          roadSamples.push({ id: p.id, x, y, bonus });
           break;
         }
       }
@@ -111,7 +114,7 @@ export function computeScores(features: Feature[], refLat: number): Scores {
     for (const e of parking.query(s.x, s.y, 60)) pNear += e.item.area;
     const frontage = bNear + pNear > 0 ? bNear / (bNear + 1.6 * pNear) : 0.35;
 
-    const walk = 0.55 * amenity + 0.45 * frontage;
+    const walk = Math.min(1, 0.55 * amenity + 0.45 * frontage + s.bonus);
     roadWalk.set(s.id, walk);
     walkSum += walk;
 

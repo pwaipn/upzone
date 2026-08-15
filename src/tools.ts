@@ -22,7 +22,16 @@ import {
   type BuildingPreset,
 } from "./edits";
 
-export type ToolName = "select" | "bulldoze" | "build" | "road" | "rail" | "station";
+export type ToolName =
+  | "select"
+  | "bulldoze"
+  | "build"
+  | "trace"
+  | "road"
+  | "rail"
+  | "station";
+
+const DRAWING: ToolName[] = ["road", "rail", "trace"];
 
 const SNAP_M = 18;
 
@@ -32,6 +41,7 @@ export class Tools {
   draft: [number, number][] = [];
   onToolChange: (() => void) | null = null;
   onActionResult: ((msg: string, ok: boolean) => void) | null = null;
+  onDraftChange: ((vertices: number, lengthM: number) => void) | null = null;
 
   private snapIdx: GridIndex<[number, number]> | null = null;
   private proj: Proj | null = null;
@@ -44,7 +54,7 @@ export class Tools {
     const map = view.map;
     map.on("click", (e) => this.click(e));
     map.on("dblclick", (e) => {
-      if (this.active === "road" || this.active === "rail") {
+      if (DRAWING.includes(this.active)) {
         e.preventDefault();
         this.finishDraft();
       }
@@ -63,13 +73,14 @@ export class Tools {
     this.draft = [];
     this.view.setDraft([]);
     this.view.setGhost([]);
-    const drawing = t === "road" || t === "rail";
+    const drawing = DRAWING.includes(t);
     if (drawing || t === "build" || t === "station") this.view.setCursor("crosshair");
     else if (t === "bulldoze") this.view.setCursor("not-allowed");
     else this.view.setCursor("");
     if (drawing) this.view.map.doubleClickZoom.disable();
     else this.view.map.doubleClickZoom.enable();
     this.onToolChange?.();
+    this.onDraftChange?.(0, 0);
   }
 
   setPreset(p: BuildingPreset): void {
@@ -133,7 +144,8 @@ export class Tools {
         break;
       }
       case "road":
-      case "rail": {
+      case "rail":
+      case "trace": {
         this.draft.push(this.snap(ll));
         this.renderDraft(ll);
         break;
@@ -155,7 +167,7 @@ export class Tools {
     const ll: [number, number] = [e.lngLat.lng, e.lngLat.lat];
     this.hoverLL = ll;
     if (this.active === "build") this.updateGhost(ll);
-    else if ((this.active === "road" || this.active === "rail") && this.draft.length) {
+    else if (DRAWING.includes(this.active) && this.draft.length) {
       this.renderDraft(ll);
     }
   }
@@ -181,7 +193,16 @@ export class Tools {
         }) as Feature,
     );
     const lineCoords = cursor ? [...this.draft, this.snap(cursor)] : this.draft;
-    if (lineCoords.length >= 2) {
+    if (this.active === "trace" && lineCoords.length >= 3) {
+      feats.push({
+        type: "Feature",
+        geometry: {
+          type: "Polygon",
+          coordinates: [[...lineCoords, lineCoords[0]]],
+        },
+        properties: { id: "dpoly", kind: "building" },
+      } as Feature);
+    } else if (lineCoords.length >= 2) {
       feats.push({
         type: "Feature",
         geometry: { type: "LineString", coordinates: lineCoords },
@@ -189,6 +210,7 @@ export class Tools {
       } as Feature);
     }
     this.view.setDraft(feats);
+    this.onDraftChange?.(this.draft.length, totalM(this.draft));
   }
 
   finishDraft(): void {
@@ -197,23 +219,39 @@ export class Tools {
     const coords = this.draft.filter(
       (c, i, a) => i === 0 || distM(c, a[i - 1]) > 1,
     );
-    if (coords.length < 2 || totalM(coords) < 10) {
-      this.cancelDraft();
-      return;
+    if (this.active === "trace") {
+      if (coords.length < 3) {
+        this.cancelDraft();
+        return;
+      }
+      const geometry: GeoJSON.Polygon = {
+        type: "Polygon",
+        coordinates: [[...coords, coords[0]]],
+      };
+      const action = placeBuilding(this.store, geometry, this.preset);
+      const res = this.store.apply(action);
+      this.onActionResult?.(res.ok ? action.label : res.reason ?? "", res.ok);
+    } else {
+      if (coords.length < 2 || totalM(coords) < 10) {
+        this.cancelDraft();
+        return;
+      }
+      const action =
+        this.active === "road"
+          ? addRoad(this.store, coords)
+          : addRail(this.store, coords);
+      const res = this.store.apply(action);
+      this.onActionResult?.(res.ok ? action.label : res.reason ?? "", res.ok);
     }
-    const action =
-      this.active === "road"
-        ? addRoad(this.store, coords)
-        : addRail(this.store, coords);
-    const res = this.store.apply(action);
-    this.onActionResult?.(res.ok ? action.label : res.reason ?? "", res.ok);
     this.draft = [];
     this.view.setDraft([]);
+    this.onDraftChange?.(0, 0);
   }
 
   cancelDraft(): void {
     this.draft = [];
     this.view.setDraft([]);
+    this.onDraftChange?.(0, 0);
   }
 
   private key(e: KeyboardEvent): void {
@@ -224,7 +262,7 @@ export class Tools {
         this.store.select(null);
         this.setTool("select");
       }
-    } else if (e.key === "Enter" && (this.active === "road" || this.active === "rail")) {
+    } else if (e.key === "Enter" && DRAWING.includes(this.active)) {
       this.finishDraft();
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
       e.preventDefault();

@@ -7,6 +7,7 @@ import "@fontsource/overpass-mono/400.css";
 import "@fontsource/overpass-mono/600.css";
 import "./style.css";
 
+import * as turf from "@turf/turf";
 import { Store } from "./state";
 import { MapView } from "./mapview";
 import { Tools } from "./tools";
@@ -15,6 +16,8 @@ import { categorize } from "./categorize";
 import { computeScores } from "./score";
 import { fetchArea, type GeocodeResult } from "./overpass";
 import { scenarioFor, type Scenario } from "./scenario";
+import { renderReport } from "./report";
+import type { Feature, Scores } from "./types";
 
 const MCLEAN = {
   slug: "mclean",
@@ -34,6 +37,8 @@ const tools = new Tools(store, view);
 
 let lensOn = false;
 let activeScenario: Scenario | null = null;
+let lastScores: Scores | null = null;
+let baselineScores: Scores | null = null;
 
 const ui = new UI(
   app,
@@ -58,6 +63,7 @@ const ui = new UI(
       store.setMode("sandbox");
       ui.updateScenario(null);
     },
+    onExportReport: () => void exportReport(),
   },
   () => scenarioFor(store.place.slug),
 );
@@ -68,6 +74,7 @@ function scheduleScore(): void {
   scoreTimer = window.setTimeout(() => {
     const features = store.features();
     const scores = computeScores(features, store.place.center[1]);
+    lastScores = scores;
     ui.updateScores(scores);
     view.setScores(scores);
     if (store.mode === "project" && activeScenario) {
@@ -94,6 +101,11 @@ store.on("selection", () => {
 store.on("place", () => {
   // Resume a project if the save says one was open.
   activeScenario = store.mode === "project" ? scenarioFor(store.place.slug) : null;
+  // Baseline for the before-and-after report: the place as found, no edits.
+  baselineScores = null;
+  window.setTimeout(() => {
+    baselineScores = computeScores([...store.base.values()], store.place.center[1]);
+  }, 50);
 });
 
 store.on("mode", () => {
@@ -138,6 +150,155 @@ async function loadRemotePlace(r: GeocodeResult): Promise<void> {
   } finally {
     ui.showOverlay(null);
   }
+}
+
+// ---- little trains running the rails -------------------------------------
+interface TrainState {
+  lineId: string;
+  pos: number;
+  dir: 1 | -1;
+  color: string;
+}
+const railLines = new Map<
+  string,
+  { f: Feature; lenM: number; color: string; speed: number }
+>();
+let trains: TrainState[] = [];
+
+function rebuildTrains(): void {
+  railLines.clear();
+  for (const f of store.features()) {
+    if (f.properties.kind !== "rail" || f.geometry.type !== "LineString") continue;
+    let lenM = 0;
+    try {
+      lenM = turf.length(f as never, { units: "kilometers" }) * 1000;
+    } catch {
+      continue;
+    }
+    if (lenM < 700) continue;
+    const light = f.properties.railKind === "lightrail";
+    railLines.set(f.properties.id, {
+      f,
+      lenM,
+      color: (f.properties.lineColor as string) ?? (light ? "#2E6B4F" : "#8E959C"),
+      speed: light ? 70 : 110,
+    });
+  }
+  trains = [];
+  for (const [lineId, line] of railLines) {
+    if (trains.length >= 40) break;
+    const n = Math.max(1, Math.min(3, Math.round(line.lenM / 2500)));
+    for (let i = 0; i < n; i++) {
+      trains.push({
+        lineId,
+        pos: (line.lenM / n) * i,
+        dir: i % 2 ? -1 : 1,
+        color: line.color,
+      });
+    }
+  }
+  if (!trains.length) view.setTrains([]);
+}
+
+store.on("change", rebuildTrains);
+store.on("place", rebuildTrains);
+
+let lastTick = performance.now();
+function tick(now: number): void {
+  const dt = Math.min(0.2, (now - lastTick) / 1000);
+  lastTick = now;
+  if (trains.length) {
+    const feats: Feature[] = [];
+    for (const tr of trains) {
+      const line = railLines.get(tr.lineId);
+      if (!line) continue;
+      tr.pos += tr.dir * line.speed * dt;
+      if (tr.pos >= line.lenM) {
+        tr.pos = line.lenM;
+        tr.dir = -1;
+      } else if (tr.pos <= 0) {
+        tr.pos = 0;
+        tr.dir = 1;
+      }
+      try {
+        const pt = turf.along(line.f as never, tr.pos / 1000);
+        feats.push({
+          type: "Feature",
+          geometry: pt.geometry,
+          properties: { id: `train-${tr.lineId}-${feats.length}`, kind: "poi", lineColor: tr.color },
+        } as Feature);
+      } catch {
+        continue;
+      }
+    }
+    view.setTrains(feats);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---- exportable district review ------------------------------------------
+async function exportReport(): Promise<void> {
+  await document.fonts.ready;
+  const after = lastScores ?? computeScores(store.features(), store.place.center[1]);
+  const before = baselineScores ?? after;
+  const features = store.features();
+
+  const parkingNow = features
+    .filter((f) => f.properties.kind === "parking")
+    .reduce((s, f) => s + (f.properties.areaM2 ?? 0), 0);
+  const parkingRemovedM2 = Math.max(0, store.baselineParkingM2 - parkingNow);
+  const railKmBuilt =
+    features
+      .filter((f) => f.properties.kind === "rail" && f.properties.isNew && f.geometry.type === "LineString")
+      .reduce((s, f) => {
+        try {
+          return s + turf.length(f as never, { units: "kilometers" });
+        } catch {
+          return s;
+        }
+      }, 0);
+  const canvas = renderReport({
+    placeName: store.place.name,
+    dateText: new Date().toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }),
+    before,
+    after,
+    parkingRemovedM2,
+    parkingRemovedPct:
+      store.baselineParkingM2 > 0 ? parkingRemovedM2 / store.baselineParkingM2 : 0,
+    railKmBuilt,
+    stationsAdded: features.filter(
+      (f) => f.properties.kind === "station" && f.properties.isNew,
+    ).length,
+    buildingsAdded: features.filter(
+      (f) => f.properties.kind === "building" && f.properties.isNew,
+    ).length,
+    greenAddedM2: features
+      .filter(
+        (f) =>
+          (f.properties.kind === "green" || f.properties.kind === "plaza") &&
+          f.properties.isNew,
+      )
+      .reduce((s, f) => s + (f.properties.areaM2 ?? 0), 0),
+    streetsImproved: features.filter(
+      (f) => f.properties.kind === "road" && (f.properties.streetscape || f.properties.treeLined),
+    ).length,
+    spent: store.mode === "project" ? store.spent() : undefined,
+    budget: store.mode === "project" ? store.budgetTotal : undefined,
+  });
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `upzone-review-${store.place.slug}.png`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    ui.toast("District review sheet downloaded.", true);
+  }, "image/png");
 }
 
 void loadMclean();

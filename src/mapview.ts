@@ -102,7 +102,7 @@ export class MapView {
 
   private addSourcesAndLayers(): void {
     const m = this.map;
-    for (const id of ["areas", "roads", "rails", "buildings", "points", "draft", "ghost", "selection"]) {
+    for (const id of ["areas", "roads", "rails", "buildings", "points", "trains", "draft", "ghost", "selection"]) {
       m.addSource(id, { type: "geojson", data: EMPTY, promoteId: "id" });
     }
 
@@ -164,17 +164,44 @@ export class MapView {
       filter: ["!=", ["get", "roadClass"], "path"],
       layout: { "line-cap": "round", "line-join": "round" },
       paint: {
-        "line-color": ["match", ["get", "roadClass"],
-          "motorway", THEME.road.motorway,
-          "primary", THEME.road.primary,
-          "secondary", THEME.road.secondary,
-          "tertiary", THEME.road.tertiary,
-          "residential", THEME.road.residential,
-          "service", THEME.road.service,
-          THEME.road.residential],
+        "line-color": ["case",
+          ["==", ["get", "streetscape"], "pedestrianized"], "#C9BCA2",
+          ["match", ["get", "roadClass"],
+            "motorway", THEME.road.motorway,
+            "primary", THEME.road.primary,
+            "secondary", THEME.road.secondary,
+            "tertiary", THEME.road.tertiary,
+            "residential", THEME.road.residential,
+            "service", THEME.road.service,
+            THEME.road.residential]],
         "line-width": roadWidth(1),
       },
     });
+    // Bike lanes down a dieted street
+    m.addLayer({
+      id: "road-diet", type: "line", source: "roads",
+      filter: ["==", ["get", "streetscape"], "dieted"],
+      paint: {
+        "line-color": THEME.green,
+        "line-width": 1.2,
+        "line-dasharray": [1.5, 2.5],
+        "line-opacity": 0.85,
+      },
+    });
+    // Street trees along both curbs
+    for (const side of [-1, 1]) {
+      m.addLayer({
+        id: `street-trees-${side === -1 ? "l" : "r"}`, type: "line", source: "roads",
+        filter: ["==", ["get", "treeLined"], true],
+        paint: {
+          "line-color": THEME.green,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.6, 18, 4],
+          "line-dasharray": [0.1, 2.2],
+          "line-offset": ["interpolate", ["linear"], ["zoom"], 14, 3 * side, 18, 14 * side],
+          "line-opacity": 0.9,
+        },
+      });
+    }
     m.addLayer({
       id: "paths", type: "line", source: "roads",
       filter: ["==", ["get", "roadClass"], "path"],
@@ -224,7 +251,10 @@ export class MapView {
       id: "rail-light", type: "line", source: "rails",
       filter: ["==", ["get", "railKind"], "lightrail"],
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": THEME.green, "line-width": 3.4 },
+      paint: {
+        "line-color": ["coalesce", ["get", "lineColor"], THEME.green],
+        "line-width": 3.4,
+      },
     });
 
     m.addLayer({
@@ -278,9 +308,20 @@ export class MapView {
       filter: ["==", ["get", "kind"], "station"],
       paint: {
         "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 4, 16, 7],
-        "circle-color": ["match", ["get", "railKind"], "lightrail", THEME.green, THEME.ink],
+        "circle-color": ["match", ["get", "railKind"],
+          "lightrail", ["coalesce", ["get", "lineColor"], THEME.green],
+          THEME.ink],
         "circle-stroke-width": 2.2,
         "circle-stroke-color": ["case", ["==", ["get", "isNew"], true], THEME.highlighter, "#FFFFFF"],
+      },
+    });
+    m.addLayer({
+      id: "trains", type: "circle", source: "trains",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 13, 3, 17, 5.5],
+        "circle-color": ["coalesce", ["get", "lineColor"], THEME.green],
+        "circle-stroke-width": 1.6,
+        "circle-stroke-color": "#FFFFFF",
       },
     });
 
@@ -314,8 +355,13 @@ export class MapView {
       paint: { "line-color": THEME.highlighter, "line-width": 2, "line-dasharray": [3, 2] },
     });
     m.addLayer({
+      id: "draft-fill", type: "fill", source: "draft",
+      filter: ["==", ["geometry-type"], "Polygon"],
+      paint: { "fill-color": THEME.highlighter, "fill-opacity": 0.16 },
+    });
+    m.addLayer({
       id: "draft-line", type: "line", source: "draft",
-      filter: ["==", ["geometry-type"], "LineString"],
+      filter: ["any", ["==", ["geometry-type"], "LineString"], ["==", ["geometry-type"], "Polygon"]],
       paint: { "line-color": THEME.highlighter, "line-width": 3, "line-dasharray": [2.5, 1.8] },
     });
     m.addLayer({
@@ -383,6 +429,10 @@ export class MapView {
 
   setGhost(features: Feature[]): void {
     this.setData("ghost", fc(features));
+  }
+
+  setTrains(features: Feature[]): void {
+    this.setData("trains", fc(features));
   }
 
   /** Topmost interesting feature id at a screen point. */

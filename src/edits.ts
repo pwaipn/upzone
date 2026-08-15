@@ -1,7 +1,7 @@
 // Builders that turn player intent into EditActions with costs attached.
 import * as turf from "@turf/turf";
 import type { BuildingUse, EditAction, Feature } from "./types";
-import { COST, METERS_PER_LEVEL } from "./types";
+import { COST, METERS_PER_LEVEL, TRANSIT_COLORS } from "./types";
 import type { Store } from "./state";
 import {
   inset,
@@ -42,6 +42,41 @@ export function remodel(f: Feature, use: BuildingUse, levels: number): EditActio
 }
 
 export type ParkingConversion = "park" | "plaza" | "building" | "behind";
+
+export type StreetscapeMove = "trees" | "diet" | "pedestrianize";
+
+export function restreet(f: Feature, move: StreetscapeMove): EditAction {
+  const km = lineLengthM(f) / 1000;
+  const id = f.properties.id;
+  switch (move) {
+    case "trees":
+      return {
+        type: "restreet",
+        id,
+        treeLined: true,
+        cost: Math.max(50_000, Math.round(km * COST.treesPerKm)),
+        label: "Street trees planted",
+      };
+    case "diet":
+      return {
+        type: "restreet",
+        id,
+        streetscape: "dieted",
+        treeLined: true,
+        cost: Math.max(200_000, Math.round(km * COST.roadDietPerKm)),
+        label: "Road diet: bike lanes and trees",
+      };
+    case "pedestrianize":
+      return {
+        type: "restreet",
+        id,
+        streetscape: "pedestrianized",
+        treeLined: true,
+        cost: Math.max(400_000, Math.round(km * COST.pedestrianizePerKm)),
+        label: "Street pedestrianized",
+      };
+  }
+}
 
 export function convertParking(
   store: Store,
@@ -218,6 +253,11 @@ export function addRoad(store: Store, coords: [number, number][]): EditAction {
 }
 
 export function addRail(store: Store, coords: [number, number][]): EditAction {
+  const existing = store
+    .features()
+    .filter((f) => f.properties.kind === "rail" && f.properties.isNew).length;
+  const lineName = `${String.fromCharCode(65 + (existing % 26))} Line`;
+  const lineColor = TRANSIT_COLORS[existing % TRANSIT_COLORS.length];
   const line: Feature = {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -226,7 +266,9 @@ export function addRail(store: Store, coords: [number, number][]): EditAction {
       kind: "rail",
       railKind: "lightrail",
       isNew: true,
-      name: "New light rail",
+      name: lineName,
+      lineName,
+      lineColor,
     },
   };
   const stations: Feature[] = [coords[0], coords[coords.length - 1]].map((c, i) => ({
@@ -237,7 +279,8 @@ export function addRail(store: Store, coords: [number, number][]): EditAction {
       kind: "station",
       railKind: "lightrail",
       isNew: true,
-      name: i === 0 ? "Terminus A" : "Terminus B",
+      name: `${lineName} terminus ${i === 0 ? "A" : "B"}`,
+      lineColor,
     },
   }));
   const cost = Math.round(
@@ -247,7 +290,7 @@ export function addRail(store: Store, coords: [number, number][]): EditAction {
     type: "add",
     features: [line, ...stations],
     cost,
-    label: "Light rail line with two termini",
+    label: `${lineName} with two termini`,
   };
 }
 
@@ -255,7 +298,7 @@ export function addStation(store: Store, at: [number, number]): EditAction | { e
   const rails = store
     .features()
     .filter((f) => f.properties.kind === "rail" && f.geometry.type === "LineString");
-  let best: { pt: [number, number]; dist: number } | null = null;
+  let best: { pt: [number, number]; dist: number; rail: Feature } | null = null;
   for (const rail of rails) {
     try {
       const snapped = turf.nearestPointOnLine(rail as never, turf.point(at), {
@@ -263,7 +306,7 @@ export function addStation(store: Store, at: [number, number]): EditAction | { e
       });
       const d = (snapped.properties.dist as number) ?? Infinity;
       if (!best || d < best.dist) {
-        best = { pt: snapped.geometry.coordinates as [number, number], dist: d };
+        best = { pt: snapped.geometry.coordinates as [number, number], dist: d, rail };
       }
     } catch {
       continue;
@@ -272,6 +315,7 @@ export function addStation(store: Store, at: [number, number]): EditAction | { e
   if (!best || best.dist > 120) {
     return { error: "Click within about a block of a rail line to place a station." };
   }
+  const lineName = best.rail.properties.lineName as string | undefined;
   const f: Feature = {
     type: "Feature",
     geometry: { type: "Point", coordinates: best.pt },
@@ -280,7 +324,8 @@ export function addStation(store: Store, at: [number, number]): EditAction | { e
       kind: "station",
       railKind: "lightrail",
       isNew: true,
-      name: "New station",
+      name: lineName ? `${lineName} station` : "New station",
+      lineColor: best.rail.properties.lineColor,
     },
   };
   return { type: "add", features: [f], cost: COST.station, label: "New station" };
