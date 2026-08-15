@@ -95,6 +95,8 @@ export interface Scores {
   density: number;
   green: number;
   overall: number;
+  /** streets sampled in the reviewed district; 0 means nothing surveyed */
+  sampleCount: number;
   /** per-road-feature walk score, for the score lens */
   roadWalk: Map<string, number>;
 }

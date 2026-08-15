@@ -2,6 +2,34 @@
 import * as turf from "@turf/turf";
 import type { Feature, Props, RoadClass, BuildingUse } from "./types";
 import { METERS_PER_LEVEL } from "./types";
+import { THEME } from "./theme";
+
+/** Shade a hex color: f < 1 darkens, f > 1 lightens. */
+function shade(hex: string, f: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (v: number) => {
+    const scaled = f <= 1 ? v * f : v + (255 - v) * (f - 1);
+    return Math.max(0, Math.min(255, Math.round(scaled)));
+  };
+  const r = ch((n >> 16) & 255);
+  const g = ch((n >> 8) & 255);
+  const b = ch(n & 255);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+}
+
+/** Deterministic small jitter from the feature id, so blocks vary. */
+function jitter(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return 0.96 + (Math.abs(h) % 9) / 100; // 0.96 … 1.04
+}
+
+/** Precomputed facade color: use color, deepened with height, jittered. */
+export function buildingColor(use: BuildingUse, levels: number, id: string): string {
+  const base = THEME.building[use] ?? THEME.building.other;
+  const heightF = 1 - Math.min(0.14, Math.max(0, levels - 1) * 0.018);
+  return shade(base, heightF * jitter(id));
+}
 
 const ROAD_CLASS: Record<string, RoadClass> = {
   motorway: "motorway",
@@ -110,14 +138,37 @@ export function categorize(raw: { features: unknown[] }): Feature[] {
             ? 4
             : defaultLevels(use);
       }
+      // Elevated parts (skywalks, buildings over plazas) start above ground
+      const minH = parseFloat(String(tags.min_height ?? ""));
+      const minLv = Number(tags["building:min_level"]);
+      const base =
+        Number.isFinite(minH) && minH > 0
+          ? minH
+          : Number.isFinite(minLv) && minLv > 0
+            ? minLv * METERS_PER_LEVEL
+            : 0;
+      const heightM =
+        Number.isFinite(heightTag) && heightTag > 0
+          ? heightTag
+          : Math.round(levels * METERS_PER_LEVEL * 10) / 10;
+      const addr =
+        tags["addr:housenumber"] && tags["addr:street"]
+          ? `${tags["addr:housenumber"]} ${tags["addr:street"]}`
+          : undefined;
       const f = mk({
         kind: "building",
         use,
         levels,
-        height: Math.round(levels * METERS_PER_LEVEL * 10) / 10,
+        height: Math.max(heightM, base + METERS_PER_LEVEL),
+        base: base || undefined,
+        addr,
+        inside: (tags.shop ?? (POI_AMENITY.has(String(tags.amenity)) ? tags.amenity : undefined)) as
+          | string
+          | undefined,
         name: tags.name as string | undefined,
       });
       f.properties.areaM2 = safeArea(f);
+      f.properties.color = buildingColor(use, levels, id);
       out.push(f);
       continue;
     }
@@ -239,5 +290,56 @@ export function categorize(raw: { features: unknown[] }): Feature[] {
       continue;
     }
   }
+
+  inferUnknownUses(out);
   return out;
+}
+
+/**
+ * Zoning-aware inference: a building tagged only building=yes takes its use
+ * from the landuse zone it stands in, sized by footprint and floors.
+ */
+function inferUnknownUses(features: Feature[]): void {
+  const zones = features.filter((f) => f.properties.kind === "zone");
+  if (!zones.length) return;
+  const zoneBBoxes = zones.map((z) => {
+    try {
+      return turf.bbox(z as never);
+    } catch {
+      return null;
+    }
+  });
+  for (const f of features) {
+    const p = f.properties;
+    if (p.kind !== "building" || p.use !== "other") continue;
+    let c: number[];
+    try {
+      c = turf.centroid(f as never).geometry.coordinates;
+    } catch {
+      continue;
+    }
+    for (let i = 0; i < zones.length; i++) {
+      const bb = zoneBBoxes[i];
+      if (!bb || c[0] < bb[0] || c[0] > bb[2] || c[1] < bb[1] || c[1] > bb[3]) continue;
+      let inside = false;
+      try {
+        inside = turf.booleanPointInPolygon(turf.point(c), zones[i] as never);
+      } catch {
+        continue;
+      }
+      if (!inside) continue;
+      const zone = zones[i].properties.zone;
+      const levels = p.levels ?? 1;
+      const area = p.areaM2 ?? 0;
+      if (zone === "commercial") {
+        p.use = levels >= 3 ? "office" : "retail";
+      } else if (zone === "residential") {
+        p.use = area < 350 && levels <= 2 ? "house" : "apartment";
+      } else if (zone === "industrial") {
+        p.use = "other";
+      }
+      p.color = buildingColor(p.use ?? "other", levels, p.id);
+      break;
+    }
+  }
 }

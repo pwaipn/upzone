@@ -468,6 +468,29 @@ button:focus-visible {
   margin-top: 2px;
 }
 
+.osm-link {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-top: 6px;
+}
+
+.survey-chip {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--sheet);
+  border: 1px solid var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+  padding: 4px 12px;
+  z-index: 15;
+}
+
 /* ---- toasts and overlay ---- */
 .toasts {
   position: absolute;

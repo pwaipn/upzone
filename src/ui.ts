@@ -5,6 +5,7 @@ import { fmtArea, fmtMoney } from "./types";
 import type { Store } from "./state";
 import type { Tools, ToolName } from "./tools";
 import { BUILDING_PRESETS, convertParking, demolish, remodel, restreet } from "./edits";
+import { lineStats, stationStats } from "./transit";
 import type { GoalResult, Scenario } from "./scenario";
 import { grade } from "./score";
 import type { GeocodeResult } from "./overpass";
@@ -53,6 +54,14 @@ export class UI {
   private overlayMsg!: HTMLElement;
   private toolButtons = new Map<ToolName, HTMLButtonElement>();
   private draftStats: HTMLElement | null = null;
+  private surveyChip!: HTMLElement;
+
+  setSurveying(pending: number): void {
+    this.surveyChip.classList.toggle("hidden", pending === 0);
+    if (pending > 0) {
+      this.surveyChip.textContent = pending > 1 ? `SURVEYING… ${pending} AREAS` : "SURVEYING…";
+    }
+  }
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
   private lensBtn!: HTMLButtonElement;
@@ -72,6 +81,8 @@ export class UI {
     this.buildScorePanel();
     this.toasts = el("div", "toasts");
     this.root.appendChild(this.toasts);
+    this.surveyChip = el("div", "survey-chip hidden", "SURVEYING…");
+    this.root.appendChild(this.surveyChip);
     this.overlay = el("div", "overlay hidden");
     const obox = el("div", "panel overlay-box");
     obox.appendChild(el("h2", "panel-title", "Field survey"));
@@ -354,15 +365,50 @@ export class UI {
 
     const p = f.properties;
     if (p.kind === "building") {
-      title.textContent = p.name ?? "Building";
+      title.textContent = p.name ?? (p.addr as string | undefined) ?? "Building";
       const useNames: Record<string, string> = {
         retail: "Retail", mixeduse: "Mixed use", apartment: "Apartments",
         house: "House", office: "Offices", civic: "Civic", garage: "Parking garage",
         other: "Building",
       };
+      const levels = p.levels ?? 1;
+      const foot = p.areaM2 ?? 0;
+      const floorArea = foot * levels;
       box.appendChild(
-        el("p", "meta", `${useNames[p.use ?? "other"]} · ${p.levels ?? 1} ${(p.levels ?? 1) === 1 ? "floor" : "floors"} · ${fmtArea(p.areaM2 ?? 0)}`),
+        el("p", "meta",
+          `${useNames[p.use ?? "other"]} · ${levels} ${levels === 1 ? "floor" : "floors"} · ${Math.round(p.height ?? levels * 3.2)} m tall`),
       );
+      box.appendChild(
+        el("p", "meta", `${fmtArea(foot)} footprint · ${fmtArea(floorArea)} of floor`),
+      );
+      if (p.addr && p.name) box.appendChild(el("p", "meta", String(p.addr)));
+      if (p.inside) box.appendChild(el("p", "meta", `Ground floor: ${String(p.inside).replace(/_/g, " ")}`));
+      // Rough occupancy, derived from floor area rather than simulated people
+      const est: string[] = [];
+      if (p.use === "house" || p.use === "apartment") {
+        est.push(`~${Math.max(1, Math.round(floorArea / 95))} ${floorArea < 190 ? "home" : "homes"}`);
+      } else if (p.use === "retail") {
+        est.push(`~${Math.max(1, Math.round(floorArea / 32))} jobs`);
+      } else if (p.use === "office") {
+        est.push(`~${Math.max(1, Math.round(floorArea / 22))} jobs`);
+      } else if (p.use === "mixeduse") {
+        const homes = Math.round(Math.max(0, floorArea - foot) / 95);
+        const jobs = Math.round(foot / 32);
+        if (homes > 0) est.push(`~${homes} homes over retail`);
+        est.push(`~${jobs} ground-floor jobs`);
+      } else if (p.use === "civic") {
+        est.push(`~${Math.max(1, Math.round((floorArea * 0.5) / 45))} jobs`);
+      }
+      if (est.length) box.appendChild(el("p", "meta", est.join(" · ")));
+      if (!p.isNew && String(p.id).includes("/")) {
+        const a = document.createElement("a");
+        a.className = "osm-link";
+        a.href = `https://www.openstreetmap.org/${p.id}`;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = "View on OpenStreetMap";
+        box.appendChild(a);
+      }
       const r1 = remodel(f, "mixeduse", 3);
       box.appendChild(this.actionButton("Redevelop: mixed use, 3 floors", r1.cost, () => this.apply(r1)));
       const r2 = remodel(f, "mixeduse", 5);
@@ -429,6 +475,19 @@ export class UI {
     if (p.kind === "rail") {
       title.textContent = p.name ?? (p.railKind === "metro" ? "Heavy rail" : "Light rail");
       box.appendChild(el("p", "meta", p.railKind === "metro" ? "Existing heavy rail" : "Light rail"));
+      if (f.geometry.type === "LineString") {
+        const refLat = (f.geometry.coordinates[0] as [number, number])[1];
+        const ls = lineStats(this.store.features(), f, refLat);
+        box.appendChild(
+          el("p", "meta",
+            `${ls.lengthKm.toFixed(1)} km · ${ls.stations.length} ${ls.stations.length === 1 ? "station" : "stations"} on this segment`),
+        );
+        if (ls.boardings > 0) {
+          box.appendChild(
+            el("p", "meta", `~${ls.boardings.toLocaleString()} estimated weekday boardings`),
+          );
+        }
+      }
       if (p.isNew) {
         const d = demolish(f);
         box.appendChild(this.actionButton("Tear out", d.cost, () => this.apply(d)));
@@ -438,6 +497,19 @@ export class UI {
     if (p.kind === "station") {
       title.textContent = p.name ?? "Station";
       box.appendChild(el("p", "meta", p.railKind === "metro" ? "Metro station" : "Light rail station"));
+      if (f.geometry.type === "Point") {
+        const refLat = (f.geometry.coordinates as [number, number])[1];
+        const st = stationStats(this.store.features(), f, refLat);
+        box.appendChild(
+          el("p", "meta", `Within an 800 m walk: ~${st.residents.toLocaleString()} residents, ~${st.jobs.toLocaleString()} jobs`),
+        );
+        box.appendChild(
+          el("p", "meta", `~${st.boardings.toLocaleString()} estimated weekday boardings`),
+        );
+        box.appendChild(
+          el("p", "hint", "Add homes and jobs within the walkshed and the boardings follow."),
+        );
+      }
       return;
     }
     title.textContent = p.name ?? p.kind;
@@ -468,6 +540,14 @@ export class UI {
   }
 
   updateScores(s: Scores): void {
+    if (s.sampleCount === 0) {
+      this.scoreBars.textContent = "";
+      this.scoreBars.appendChild(
+        el("p", "hint", "Nothing surveyed in view yet. Zoom in and the survey fills itself in."),
+      );
+      this.stampWrap.innerHTML = "";
+      return;
+    }
     const bars: [string, number][] = [
       ["Walkability", s.walk],
       ["Transit", s.transit],

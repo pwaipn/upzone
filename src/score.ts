@@ -14,8 +14,29 @@ interface VolEntry {
 
 const WALKABLE = new Set(["primary", "secondary", "tertiary", "residential"]);
 
-export function computeScores(features: Feature[], refLat: number): Scores {
+export interface ScoreScope {
+  center?: [number, number];
+  radiusM?: number;
+}
+
+export function computeScores(
+  features: Feature[],
+  refLat: number,
+  scope: ScoreScope = {},
+): Scores {
   const proj = makeProj(refLat);
+  let scopeXY: [number, number] | null = null;
+  const radiusM = scope.radiusM ?? Infinity;
+  if (scope.center && Number.isFinite(radiusM)) {
+    scopeXY = proj.toXY(scope.center[0], scope.center[1]);
+  }
+  const inScope = (x: number, y: number, extraM: number): boolean => {
+    if (!scopeXY) return true;
+    const dx = x - scopeXY[0];
+    const dy = y - scopeXY[1];
+    const r = radiusM + extraM;
+    return dx * dx + dy * dy <= r * r;
+  };
 
   const pois = new GridIndex<true>(200);
   const stations = new GridIndex<true>(400);
@@ -35,24 +56,25 @@ export function computeScores(features: Feature[], refLat: number): Scores {
         case "poi": {
           const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
           const [x, y] = proj.toXY(lon, lat);
-          pois.insert(x, y, true);
+          if (inScope(x, y, 600)) pois.insert(x, y, true);
           break;
         }
         case "station": {
           const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
           const [x, y] = proj.toXY(lon, lat);
-          stations.insert(x, y, true);
+          if (inScope(x, y, 1000)) stations.insert(x, y, true);
           break;
         }
         case "stop": {
           const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
           const [x, y] = proj.toXY(lon, lat);
-          stops.insert(x, y, true);
+          if (inScope(x, y, 600)) stops.insert(x, y, true);
           break;
         }
         case "building": {
           const c = turf.centroid(f as never).geometry.coordinates;
           const [x, y] = proj.toXY(c[0], c[1]);
+          if (!inScope(x, y, 600)) break;
           const area = p.areaM2 ?? 0;
           buildings.insert(x, y, { vol: area * (p.levels ?? 1), area });
           // Ground-floor retail and mixed use count as walkable destinations too.
@@ -62,18 +84,20 @@ export function computeScores(features: Feature[], refLat: number): Scores {
         case "parking": {
           const c = turf.centroid(f as never).geometry.coordinates;
           const [x, y] = proj.toXY(c[0], c[1]);
+          if (!inScope(x, y, 600)) break;
           const area = p.areaM2 ?? 0;
           parking.insert(x, y, { area });
-          totalParkingM2 += area;
+          if (inScope(x, y, 0)) totalParkingM2 += area;
           break;
         }
         case "green":
         case "plaza": {
           const c = turf.centroid(f as never).geometry.coordinates;
           const [x, y] = proj.toXY(c[0], c[1]);
+          if (!inScope(x, y, 600)) break;
           const area = p.areaM2 ?? 0;
           parks.insert(x, y, { area });
-          totalParkM2 += area;
+          if (inScope(x, y, 0)) totalParkM2 += area;
           break;
         }
         case "road": {
@@ -84,6 +108,7 @@ export function computeScores(features: Feature[], refLat: number): Scores {
           const mid = turf.along(f as never, turf.length(f as never) / 2)
             .geometry.coordinates;
           const [x, y] = proj.toXY(mid[0], mid[1]);
+          if (!inScope(x, y, 0)) break;
           const bonus =
             (p.streetscape === "pedestrianized" ? 0.25 : p.streetscape === "dieted" ? 0.15 : 0) +
             (p.treeLined ? 0.05 : 0);
@@ -156,6 +181,7 @@ export function computeScores(features: Feature[], refLat: number): Scores {
     density: Math.round(density * 100),
     green: Math.round(green * 100),
     overall: Math.round(overall * 100),
+    sampleCount: roadSamples.length,
     roadWalk,
   };
 }

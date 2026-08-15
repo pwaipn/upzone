@@ -10,6 +10,7 @@ import {
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Feature, FC, Scores } from "./types";
 import { THEME } from "./theme";
+import { addBasemap } from "./basemap";
 
 type XY = { x: number; y: number };
 
@@ -102,6 +103,7 @@ export class MapView {
 
   private addSourcesAndLayers(): void {
     const m = this.map;
+    addBasemap(m);
     for (const id of ["areas", "roads", "rails", "buildings", "points", "trains", "draft", "ghost", "selection"]) {
       m.addSource(id, { type: "geojson", data: EMPTY, promoteId: "id" });
     }
@@ -260,17 +262,21 @@ export class MapView {
     m.addLayer({
       id: "buildings", type: "fill-extrusion", source: "buildings",
       paint: {
-        "fill-extrusion-color": ["match", ["get", "use"],
-          "retail", THEME.building.retail,
-          "mixeduse", THEME.building.mixeduse,
-          "apartment", THEME.building.apartment,
-          "house", THEME.building.house,
-          "office", THEME.building.office,
-          "civic", THEME.building.civic,
-          "garage", THEME.building.garage,
-          THEME.building.other],
+        "fill-extrusion-color": ["coalesce",
+          ["get", "color"],
+          ["match", ["get", "use"],
+            "retail", THEME.building.retail,
+            "mixeduse", THEME.building.mixeduse,
+            "apartment", THEME.building.apartment,
+            "house", THEME.building.house,
+            "office", THEME.building.office,
+            "civic", THEME.building.civic,
+            "garage", THEME.building.garage,
+            THEME.building.other]],
         "fill-extrusion-height": ["coalesce", ["get", "height"], 4],
+        "fill-extrusion-base": ["coalesce", ["get", "base"], 0],
         "fill-extrusion-opacity": 0.92,
+        "fill-extrusion-vertical-gradient": true,
       },
     });
 

@@ -59,6 +59,8 @@ const KEEP = new Set([
   "landuse", "leisure", "natural", "waterway", "railway", "shop", "parking",
   "public_transport", "station", "lanes", "surface", "layer", "bridge",
   "tunnel", "service", "access", "oneway",
+  "min_height", "building:min_level", "roof:levels",
+  "addr:housenumber", "addr:street",
 ]);
 const round = (c) => Math.round(c * 1e6) / 1e6;
 const roundCoords = (coords) =>

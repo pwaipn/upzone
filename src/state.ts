@@ -1,4 +1,5 @@
 import type { EditAction, Feature } from "./types";
+import { buildingColor } from "./categorize";
 
 export type Mode = "sandbox" | "project";
 type Listener = () => void;
@@ -63,6 +64,56 @@ export class Store {
     return `new-${Date.now().toString(36)}-${this.idCounter++}`;
   }
 
+  /** Merge streamed tile features into the base world. Returns added ids. */
+  mergeBase(features: Feature[]): string[] {
+    const added: string[] = [];
+    for (const f of features) {
+      const id = f.properties.id;
+      if (this.base.has(id)) continue;
+      this.base.set(id, f);
+      added.push(id);
+      if (f.properties.kind === "parking") {
+        this.baselineParkingM2 += f.properties.areaM2 ?? 0;
+      }
+    }
+    if (added.length) {
+      this.derived = null;
+      this.emit("change");
+    }
+    return added;
+  }
+
+  /** Drop far-away unedited base features to keep memory bounded. */
+  evictBase(ids: string[]): void {
+    let removed = 0;
+    for (const id of ids) {
+      const f = this.base.get(id);
+      if (!f) continue;
+      if (f.properties.kind === "parking") {
+        this.baselineParkingM2 -= f.properties.areaM2 ?? 0;
+      }
+      this.base.delete(id);
+      removed++;
+    }
+    if (removed) {
+      this.derived = null;
+      this.emit("change");
+    }
+  }
+
+  /** Base feature ids that any edit depends on. */
+  referencedIds(): Set<string> {
+    const s = new Set<string>();
+    for (const a of this.edits) {
+      if (a.type === "demolish" || a.type === "remodel" || a.type === "restreet") {
+        s.add(a.id);
+      } else if (a.type === "replace") {
+        s.add(a.removeId);
+      }
+    }
+    return s;
+  }
+
   /** Current world: base plus applied edits. */
   current(): Map<string, Feature> {
     if (this.derived) return this.derived;
@@ -83,6 +134,7 @@ export class Store {
                 use: a.use,
                 levels: a.levels,
                 height: Math.round(a.levels * 3.2 * 10) / 10,
+                color: buildingColor(a.use, a.levels, a.id),
                 isNew: true,
               },
             });

@@ -3,6 +3,7 @@ import * as turf from "@turf/turf";
 import type { BuildingUse, EditAction, Feature } from "./types";
 import { COST, METERS_PER_LEVEL, TRANSIT_COLORS } from "./types";
 import type { Store } from "./state";
+import { buildingColor } from "./categorize";
 import {
   inset,
   lineLengthM,
@@ -114,16 +115,18 @@ export function convertParking(
     if (!shrunk) return { error: "This lot is too small or too oddly shaped to build on." };
     const bArea = turf.area(shrunk as never);
     const levels = 3;
+    const nid = store.newId();
     const f: Feature = {
       type: "Feature",
       geometry: shrunk.geometry,
       properties: {
-        id: store.newId(),
+        id: nid,
         kind: "building",
         use: "mixeduse",
         levels,
         height: levels * METERS_PER_LEVEL,
         areaM2: bArea,
+        color: buildingColor("mixeduse", levels, nid),
         isNew: true,
         name: "New mixed-use building",
       },
@@ -151,16 +154,18 @@ export function convertParking(
   if (bArea < 100) return { error: "The street-facing half is too small to build on." };
   const rearArea = turf.area(split.rear as never);
   const levels = 3;
+  const bid = store.newId();
   const building: Feature = {
     type: "Feature",
     geometry: bFoot.geometry,
     properties: {
-      id: store.newId(),
+      id: bid,
       kind: "building",
       use: "mixeduse",
       levels,
       height: levels * METERS_PER_LEVEL,
       areaM2: bArea,
+      color: buildingColor("mixeduse", levels, bid),
       isNew: true,
       name: "New street-front building",
     },
@@ -218,16 +223,18 @@ export function placeBuilding(
   geometry: GeoJSON.Polygon,
   preset: BuildingPreset,
 ): EditAction {
+  const pid = store.newId();
   const f: Feature = {
     type: "Feature",
     geometry,
     properties: {
-      id: store.newId(),
+      id: pid,
       kind: "building",
       use: preset.use,
       levels: preset.levels,
       height: preset.levels * METERS_PER_LEVEL,
       areaM2: turf.area(turf.feature(geometry) as never),
+      color: buildingColor(preset.use, preset.levels, pid),
       isNew: true,
       name: preset.name,
     },

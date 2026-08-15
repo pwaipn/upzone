@@ -36,6 +36,8 @@ const KEEP = new Set([
   "building", "building:levels", "height", "name", "highway", "amenity",
   "landuse", "leisure", "natural", "waterway", "railway", "shop", "parking",
   "public_transport", "station",
+  "min_height", "building:min_level", "roof:levels",
+  "addr:housenumber", "addr:street",
 ]);
 
 interface OverpassElement {
@@ -109,17 +111,16 @@ function elementToFeatures(el: OverpassElement): Feature[] {
   return [];
 }
 
-/** Fetch a playable area around a point. Clamped to roughly 4 km square. */
-export async function fetchArea(
-  lat: number,
-  lon: number,
-  onStatus: (msg: string) => void,
-): Promise<{ features: Feature[] }> {
-  const dLat = 0.018;
-  const dLon = 0.018 / Math.cos((lat * Math.PI) / 180);
-  const bbox = `${lat - dLat},${lon - dLon},${lat + dLat},${lon + dLon}`;
+/** Fetch one bounding box of raw flattened OSM features. */
+export async function fetchBBox(
+  south: number,
+  west: number,
+  north: number,
+  east: number,
+): Promise<Feature[]> {
+  const bbox = `${south},${west},${north},${east}`;
   const query = `
-[out:json][timeout:90];
+[out:json][timeout:60];
 (
   way["building"](${bbox});
   relation["building"](${bbox});
@@ -139,16 +140,26 @@ export async function fetchArea(
 );
 out geom qt;
 `;
-  onStatus("Asking OpenStreetMap for the neighborhood…");
-  const res = await fetch("https://overpass-api.de/api/interpreter", {
-    method: "POST",
-    body: "data=" + encodeURIComponent(query),
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-  });
-  if (!res.ok) throw new Error(`Overpass returned ${res.status}. Try again in a minute.`);
-  const osm = (await res.json()) as { elements: OverpassElement[] };
-  onStatus(`Drafting ${osm.elements.length.toLocaleString()} map elements…`);
-  const features: Feature[] = [];
-  for (const el of osm.elements) features.push(...elementToFeatures(el));
-  return { features };
+  const endpoints = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+  ];
+  let lastErr: Error | null = null;
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        body: "data=" + encodeURIComponent(query),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      });
+      if (!res.ok) throw new Error(`Overpass returned ${res.status}`);
+      const osm = (await res.json()) as { elements: OverpassElement[] };
+      const features: Feature[] = [];
+      for (const el of osm.elements) features.push(...elementToFeatures(el));
+      return features;
+    } catch (err) {
+      lastErr = err as Error;
+    }
+  }
+  throw lastErr ?? new Error("Overpass unavailable");
 }

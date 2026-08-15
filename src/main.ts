@@ -13,10 +13,11 @@ import { MapView } from "./mapview";
 import { Tools } from "./tools";
 import { UI } from "./ui";
 import { categorize } from "./categorize";
-import { computeScores } from "./score";
-import { fetchArea, type GeocodeResult } from "./overpass";
+import { computeScores, type ScoreScope } from "./score";
+import type { GeocodeResult } from "./overpass";
 import { scenarioFor, type Scenario } from "./scenario";
 import { renderReport } from "./report";
+import { TileManager } from "./tiles";
 import type { Feature, Scores } from "./types";
 
 const MCLEAN = {
@@ -38,14 +39,23 @@ const tools = new Tools(store, view);
 let lensOn = false;
 let activeScenario: Scenario | null = null;
 let lastScores: Scores | null = null;
-let baselineScores: Scores | null = null;
+
+/** The review always grades the district on the drafting table: a 3 km
+ * radius around wherever the camera is looking. */
+function currentScope(): ScoreScope & { refLat: number } {
+  const c = view.map.getCenter();
+  return { center: [c.lng, c.lat], radiusM: 3000, refLat: c.lat };
+}
 
 const ui = new UI(
   app,
   store,
   tools,
   {
-    onSearchPick: (r) => void loadRemotePlace(r),
+    onSearchPick: (r: GeocodeResult) => {
+      view.flyTo([r.lon, r.lat], 15);
+      ui.toast(`Heading to ${r.name}. The survey fills in as you look around.`, true);
+    },
     onToggleLens: () => {
       lensOn = !lensOn;
       view.setLens(lensOn);
@@ -68,12 +78,18 @@ const ui = new UI(
   () => scenarioFor(store.place.slug),
 );
 
+const tiles = new TileManager(store, view);
+tiles.onStatus = (inflight, queued) => ui.setSurveying(inflight + queued);
+tiles.onLimit = () =>
+  ui.toast("The drafting table is full. Distant unedited areas will be set aside as you roam.", false);
+
 let scoreTimer: number | undefined;
 function scheduleScore(): void {
   window.clearTimeout(scoreTimer);
   scoreTimer = window.setTimeout(() => {
     const features = store.features();
-    const scores = computeScores(features, store.place.center[1]);
+    const scope = currentScope();
+    const scores = computeScores(features, scope.refLat, scope);
     lastScores = scores;
     ui.updateScores(scores);
     view.setScores(scores);
@@ -101,12 +117,10 @@ store.on("selection", () => {
 store.on("place", () => {
   // Resume a project if the save says one was open.
   activeScenario = store.mode === "project" ? scenarioFor(store.place.slug) : null;
-  // Baseline for the before-and-after report: the place as found, no edits.
-  baselineScores = null;
-  window.setTimeout(() => {
-    baselineScores = computeScores([...store.base.values()], store.place.center[1]);
-  }, 50);
 });
+
+// The reviewed district follows the camera.
+view.map.on("moveend", () => scheduleScore());
 
 store.on("mode", () => {
   // Imports can flip the mode without going through the project buttons.
@@ -131,26 +145,6 @@ async function loadMclean(): Promise<void> {
   }
 }
 
-async function loadRemotePlace(r: GeocodeResult): Promise<void> {
-  ui.showOverlay(`Surveying ${r.name}…`);
-  try {
-    const raw = await fetchArea(r.lat, r.lon, (msg) => ui.showOverlay(msg));
-    const features = categorize(raw);
-    if (features.length < 20) {
-      ui.toast("OpenStreetMap has almost nothing mapped there. Try somewhere more built up.", false);
-      return;
-    }
-    store.loadPlace(
-      { slug: r.slug, name: r.name, center: [r.lon, r.lat], zoom: 14.8 },
-      features,
-    );
-    view.flyTo([r.lon, r.lat], 14.8);
-  } catch (err) {
-    ui.toast(String((err as Error).message ?? err), false);
-  } finally {
-    ui.showOverlay(null);
-  }
-}
 
 // ---- little trains running the rails -------------------------------------
 interface TrainState {
@@ -240,8 +234,10 @@ requestAnimationFrame(tick);
 // ---- exportable district review ------------------------------------------
 async function exportReport(): Promise<void> {
   await document.fonts.ready;
-  const after = lastScores ?? computeScores(store.features(), store.place.center[1]);
-  const before = baselineScores ?? after;
+  const scope = currentScope();
+  const after = lastScores ?? computeScores(store.features(), scope.refLat, scope);
+  // Baseline: the same district as OpenStreetMap found it, no edits applied.
+  const before = computeScores([...store.base.values()], scope.refLat, scope);
   const features = store.features();
 
   const parkingNow = features
